@@ -1,15 +1,10 @@
 package main
 
 import (
-	"amqp"
 	"encoding/json"
-)
 
-type RPCQueue struct {
-	name    string
-	bindKey string
-	queue   amqp.Queue
-}
+	"rabitmq/amqp"
+)
 
 type RPC struct {
 	host       string
@@ -21,12 +16,40 @@ type RPC struct {
 	MaxPubSize int
 }
 
-func (this *RPC) AddQueue(name, bindKey string) {
-	q := &RPCQueue{name: name, bindKey: bindKey}
+func NewRPC(host, exchange string) *RPC {
+	return &RPC{
+		host:     host,
+		exchange: EXPrefix + exchange,
+	}
+}
+
+func (this *RPC) AddQueue(qname, iname string) { //Add queue for interface
+	q := &RPCQueue{
+		name:    qname,
+		bindKey: iname, //The binding key is the interface name
+	}
 	this.queues = append(this.queues, q)
 }
 
-func (this *RPC) Stop() {
+func (this *RPC) Send() {
+	jmsg, err := json.Marshal(response)
+	failOnError(err, "Failed to convert body to integer")
+
+	err = ch.Publish(
+		this.exchange, // exchange
+		d.ReplyTo,     // routing key
+		false,         // mandatory
+		false,         // immediate
+		amqp.Publishing{
+			ContentType:   "text/plain",
+			CorrelationId: d.CorrelationId,
+			Body:          jmsg,
+		})
+	failOnError(err, "Failed to publish a message")
+	log.Printf("[SVR]->%s: %+v", d.CorrelationId, *response)
+}
+
+func (this *RPC) Destroy() {
 	if this.ch != nil {
 		this.ch.Close()
 	}
@@ -35,17 +58,17 @@ func (this *RPC) Stop() {
 	}
 }
 
-func (this *RPC) Start() (err error) {
+func (this *RPC) Init() (err error) {
 	this.conn, err = amqp.Dial(host)
 	if err != nil {
 		failOnError(err, "Failed to connect to RabbitMQ")
-		this.Stop()
+		this.Destroy()
 		return
 	}
 
 	this.ch, err = this.conn.Channel()
 	if err != nil {
-		this.Stop()
+		this.Destroy()
 		failOnError(err, "Failed to open a channel")
 		return err
 	}
@@ -59,7 +82,7 @@ func (this *RPC) Start() (err error) {
 		nil,           // arguments
 	)
 	if err != nil {
-		this.Stop()
+		this.Destroy()
 		failOnError(err, "Failed to declare an exchange")
 		return err
 	}
@@ -75,7 +98,7 @@ func (this *RPC) Start() (err error) {
 		)
 
 		if err != nil {
-			this.Stop()
+			this.Destroy()
 			failOnError(err, "Failed to declare a queue")
 			return err
 		}
@@ -88,12 +111,27 @@ func (this *RPC) Start() (err error) {
 			nil)
 
 		if err != nil {
-			this.Stop()
+			this.Destroy()
 			failOnError(err, "Failed to bind a queue")
 			return err
 		}
-	}
 
+		q.Deliveries, err = this.ch.Consume(
+			q.name, // queue
+			"",     // consumer
+			true,   // auto-ack
+			false,  // exclusive
+			false,  // no-local
+			false,  // no-wait
+			nil,    // args
+		)
+
+		if err != nil {
+			this.Destroy()
+			failOnError(err, "Failed to register a consumer")
+			return err
+		}
+	}
 	return nil
 }
 
@@ -111,13 +149,13 @@ func (this *RPC) doPub() {
 
 			err = this.ch.Publish(
 				this.exchange,
-				msg.routKey,
+				jmsg.routKey,
 				false, // mandatory
 				false, // immediate
 				amqp.Publishing{
 					ContentType:   "application/json",
-					CorrelationId: msg.corid,
-					ReplyTo:       msg.replyTo,
+					CorrelationId: jmsg.corid,
+					ReplyTo:       jmsg.replyTo,
 					Body:          []byte(msg),
 				})
 			if err != nil {
@@ -135,12 +173,6 @@ func (this *RPC) Publish(msg *Msg) bool {
 	}
 
 	this.pubChan <- msg
+	return true
 
-}
-
-func NewRPC(host, exchange string) *RPC {
-	return &RPC{
-		host:     host,
-		exchange: EXPrefix + exchange,
-	}
 }

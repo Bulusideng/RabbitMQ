@@ -8,24 +8,24 @@ var (
 type Service struct {
 	name       string
 	id         int //Id must be unique for one service
-	interfaces []*ServiceInterface
+	interfaces []*ServicePort
 	rpc        *RPC
 }
 
-func NewService(sname string, id int) *Service {
+func NewService(sname, host string, id int) *Service {
 	return &Service{
 		name: sname,
 		id:   id,
-		rpc:  NewRPC(sname),
+		rpc:  NewRPC(sname, host),
 	}
 }
 
-func (this *Service) AddInterface(si *ServiceInterface) {
+func (this *Service) AddInterface(si *ServicePort) {
 	this.interfaces = append(this.interfaces, si)
 }
 
 func (this *Service) Start() {
-	for iface, _ := range this.interfaces {
-		this.rpc.AddQueue(QPrefix+this.name+"."+string(id), iface.name)
+	for _, iface := range this.interfaces {
+		this.rpc.AddQueue(QPrefix+this.name+"."+string(this.id), iface.name)
 	}
 }
